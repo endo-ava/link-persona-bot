@@ -60,10 +60,14 @@ docker compose down
    - 記事抽出、解析、ペルソナ生成を統括
    - **現在の状態**: 基本的な`/health`エンドポイントのみ実装済み
 
-3. **実装予定のモジュール**:
+3. **実装済みのモジュール**:
+   - `api/llm_client.py`: OpenAI互換のLLM APIクライアント（Qwen, OpenAI等に対応）
+   - `api/persona_loader.py`: YAMLファイルからペルソナ定義を読み込むローダー
+   - `api/personas/`: YAMLベースのペルソナテンプレート（現在: `sarcastic.yaml`）
+   - `bot/main.py`: Discord Bot本体（`/persona`コマンド、チャットモード）
+
+4. **実装予定のモジュール**:
    - `api/fetcher.py`: `trafilatura`を使用した記事テキスト抽出
-   - `api/qwen_client.py`: LLM操作用のQwen APIラッパー
-   - `api/personas/`: YAMLベースのペルソナテンプレート（例: `sarcastic.yaml`, `anime.yaml`）
    - `context/memory.py`: ユーザー履歴用の軽量RAG（FAISSまたはインメモリ）
 
 ### リクエストフロー（計画中のアーキテクチャ）
@@ -90,10 +94,18 @@ Discord Embedで投稿（ペルソナの個性を反映）
 ### パッケージ管理
 - **uv**を使用（pip/poetryではない）
 - Python 3.12以上が必須
-- パッケージは`pyproject.toml`で定義、`[tool.hatch.build.targets.wheel]`で`api`パッケージを設定
+- パッケージは`pyproject.toml`で定義、`[tool.hatch.build.targets.wheel]`で`api`と`bot`パッケージを設定
+
+### LLM API クライアント
+- `api/llm_client.py`は**汎用的なOpenAI互換クライアント**
+- 対応プロバイダー: Qwen, OpenAI, OpenRouter, Azure OpenAI, ローカルLLM等
+- 環境変数: `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_API_URL`, `LLM_MODEL`を使用
+- プロバイダー別の自動設定（デフォルトURL・モデル）あり
+- 追加ヘッダー対応（OpenRouter等で必要な`HTTP-Referer`等）
+- 他のLLMサービスへの切り替えが環境変数変更のみで可能
 
 ### ペルソナテンプレートシステム
-ペルソナは`api/personas/`内のYAMLファイルとして定義（未実装）:
+ペルソナは`api/personas/`内のYAMLファイルとして定義:
 
 ```yaml
 # 例: personas/sarcastic.yaml
