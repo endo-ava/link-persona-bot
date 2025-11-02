@@ -1,147 +1,146 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+このファイルは、Claude Code (claude.ai/code) がこのリポジトリで作業する際のガイダンスを提供します。
 
 ## プロジェクト概要
 
-**Link Persona Bot** は、DiscordでURL共有された記事をAIが解析し、「人格（ペルソナ）」を持って要約するBotです。記事を独自のキャラクターボイスで擬人化し、単なる情報提供ではなくエンターテイメント体験を創出します。
-
-### コアコンセプト
-- **情報が「人格」になる**: 記事を独自のトーンと声を持つキャラクターに変換
-- **遊び心重視**: ユーザーが試したくなるコマンド設計（例: `/debate`）
-- **高い拡張性**: YAMLベースのペルソナテンプレートによる容易なカスタマイズ
+**Link Persona Bot** は、Discord で共有された URL 記事を AI が独自の「人格」で要約する Bot です。記事を個性的なキャラクター（毒舌記者、教授、アニメキャラなど）のボイスで擬人化し、エンターテイメント体験を提供します。
 
 ## 開発コマンド
 
-### セットアップ
 ```bash
-# 依存関係のインストール（Python 3.12以上が必要）
+# セットアップ（Python 3.12+ 必須）
 uv sync
+cp .env.example .env  # DISCORD_TOKEN, LLM_API_KEY, LLM_PROVIDER を設定
 
-# 環境変数の設定
-cp .env.example .env
-```
-
-### APIサーバーの起動
-```bash
-# 開発モード（ホットリロード有効）
+# API サーバー起動（開発モード）
 uv run uvicorn api.main:app --reload
 
-# 別の起動方法
-uv run python -m api.main
+# Discord Bot 起動
+uv run python -m bot.main
 
-# ヘルスチェック
-curl http://localhost:8000/health
-```
+# 本番モード（API + Bot 同時起動）
+bash start.sh
 
-### Docker開発
-```bash
-# コンテナのビルドと起動
+# Docker 開発
 docker compose up -d
-
-# ログの確認
 docker compose logs -f api
 
-# コンテナの停止
-docker compose down
+# 接続テスト
+uv run python tools/test/test_llm_connection.py
+uv run python tools/test/test_discord_connection.py
 ```
 
 ## アーキテクチャ
 
-### システムコンポーネント
+### コアコンポーネント
 
-1. **Discord Bot** (`bot/` - 実装予定)
-   - DiscordメッセージからURLを監視
-   - FastAPIバックエンドへHTTPリクエストを送信
-   - ペルソナベースの要約をDiscord Embedとして投稿
+1. **Discord Bot** (`bot/main.py`)
+   - `/persona <style>` コマンドでペルソナ切り替え ✅実装済
+   - メンション応答でペルソナチャット対応 ✅実装済
+   - チャンネル別のペルソナ設定と会話履歴を保持（最新 20 件）✅実装済
 
-2. **FastAPIバックエンド** (`api/`)
-   - Discord BotからのURL処理リクエストを受信
-   - 記事抽出、解析、ペルソナ生成を統括
-   - **現在の状態**: 基本的な`/health`エンドポイントのみ実装済み
+2. **FastAPI バックエンド** (`api/main.py`)
+   - 現在: `/health` エンドポイントのみ実装
+   - 計画: `/ingest` で URL 解析・ペルソナ生成
 
-3. **実装予定のモジュール**:
-   - `api/fetcher.py`: `trafilatura`を使用した記事テキスト抽出
-   - `api/qwen_client.py`: LLM操作用のQwen APIラッパー
-   - `api/personas/`: YAMLベースのペルソナテンプレート（例: `sarcastic.yaml`, `anime.yaml`）
-   - `context/memory.py`: ユーザー履歴用の軽量RAG（FAISSまたはインメモリ）
+3. **LLM クライアント** (`api/llm_client.py`)
+   - **OpenAI 互換の汎用クライアント**（複数プロバイダー対応）
+   - 環境変数: `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_API_URL`, `LLM_MODEL`
+   - 対応: Qwen（デフォルト）, OpenAI, OpenRouter, Azure OpenAI, カスタム
+   - プロバイダー切り替えは環境変数変更のみで可能
 
-### リクエストフロー（計画中のアーキテクチャ）
+4. **ペルソナシステム** (`api/persona_loader.py`)
+   - `api/personas/*.yaml` から定義を読み込み
+   - ペルソナ定義: name, icon, color, description, system_prompt, examples
+   - **新規追加はYAMLファイル作成のみ（コード変更不要）**
+
+### リクエストフロー（計画中）
 
 ```
-ユーザーがDiscordにURLを投稿
+Discord に URL 投稿
   ↓
-Discord BotがURLを検出
+Bot が URL 検出
   ↓
-POST /ingest {url, user_id, guild_id} → FastAPI
+POST /ingest → FastAPI
   ↓
-1. 記事テキストの抽出（trafilatura）
-2. トーンと著者ペルソナの分析（Qwen API）
-3. マッチするペルソナテンプレートを選択（YAML）
-4. ペルソナベースのナレーション生成（Qwen API）
+1. trafilatura で記事抽出
+2. LLM でトーン・著者分析
+3. 適合ペルソナ選択（YAML）
+4. ペルソナベースの要約生成
   ↓
-JSONレスポンスを返却 → Discord Bot
-  ↓
-Discord Embedで投稿（ペルソナの個性を反映）
+Discord Embed で投稿
 ```
 
-## 重要な技術的決定事項
+### 実装状況
+
+**完了:**
+- FastAPI 基本構造、LLM クライアント、ペルソナローダー
+- Discord Bot: `/persona` コマンド、メンション応答、会話履歴
+
+**計画:**
+- 記事抽出（`api/fetcher.py`）、URL 自動要約（F101）、`/debate` コマンド（F202）、RAG 履歴（F301）
+
+## 技術的決定事項
 
 ### パッケージ管理
-- **uv**を使用（pip/poetryではない）
-- Python 3.12以上が必須
-- パッケージは`pyproject.toml`で定義、`[tool.hatch.build.targets.wheel]`で`api`パッケージを設定
+- **uv** 使用（pip/poetry 不使用）
+- Python 3.12+ 必須
+- `pyproject.toml` で `api` と `bot` パッケージを定義
 
-### ペルソナテンプレートシステム
-ペルソナは`api/personas/`内のYAMLファイルとして定義（未実装）:
+### LLM プロバイダー設定
+環境変数で全設定を制御（ハードコード不要）:
+
+```bash
+# Qwen（デフォルト）
+LLM_PROVIDER=qwen
+LLM_API_KEY=sk-xxx
+LLM_MODEL=qwen-plus
+
+# OpenAI
+LLM_PROVIDER=openai
+LLM_API_KEY=sk-xxx
+LLM_MODEL=gpt-4
+```
+
+### ペルソナテンプレート
+`api/personas/*.yaml` で定義:
 
 ```yaml
-# 例: personas/sarcastic.yaml
 name: "毒舌ジャーナリスト"
 icon: "👁️"
 color: 0xff4500
 system_prompt: |
   あなたは皮肉たっぷりのベテランジャーナリストです。
-  要約は100字以内で、必ず「…らしいですよ？」や「どうせ～」などの言い回しを使い、
-  少し冷笑的に、でも核心を突いて話してください。
+  核心を突きつつも少し意地悪な物言いが特徴。
 ```
 
-新しいペルソナの追加は、コード変更なしでYAMLファイルの追加・編集のみで完了すること。
+### デプロイ
+- **プラットフォーム:** Koyeb（無料枠）
+- **起動:** `start.sh` が API（バックグラウンド）+ Bot（フォアグラウンド）を統括
+- **シークレット:** 環境変数で管理（Koyeb Secrets）
+- **データ永続化:** RAG データは再デプロイで消失（要件上許容）
 
-### 非機能要件（docs/01.project.mdより）
+## 機能優先度（MoSCoW）
 
-- **パフォーマンス**: URL投稿からBot要約まで約10秒の応答時間を目標
-- **記事抽出**: 静的HTMLサイトのみサポート（JSレンダリングが必要なSPAは対象外）
-- **レート制限**: ユーザーあたり1分間に1コマンド
-- **コスト制御**: LLMに送信前に記事テキストを最大2000文字に切り詰め
-- **セキュリティ**: APIキーはKoyeb Secrets（環境変数）で管理、ハードコード禁止
+- **F101 [Must]**: URL 自動要約 - 記事検出、抽出、ペルソナ要約生成
+- **F201 [Must]**: ペルソナチャットモード - `/persona <style>` で人格切り替え ✅**実装済**
+- **F302 [Must]**: 会話記憶 - F201 中の会話コンテキスト維持 ✅**実装済**
+- **F202 [Should]**: ディベートモード - `/debate` で反論生成
+- **F301 [Could]**: ユーザー履歴 RAG - 過去リンクを記憶してパーソナライズ
 
-## 機能ロードマップ
+## 非機能要件
 
-### 実装済み（MVPフェーズ）
-- ✅ FastAPI基本構造
-- ✅ `/health`ヘルスチェックエンドポイント
-- ✅ Python 3.12を使用したDocker環境
-- ✅ uv依存関係管理
+- **パフォーマンス:** URL 投稿から要約まで約 10 秒目標
+- **記事抽出:** 静的 HTML のみ対応（SPA/JS レンダリング非対応）
+- **レート制限:** ユーザーあたり 1 分間に 1 コマンド
+- **コスト制御:** 記事を最大 2000 文字に切り詰めて LLM 送信
+- **セキュリティ:** API キーは環境変数のみ（ハードコード禁止）
 
-### 優先機能（要件定義より）
-- **F101 [Must]**: Auto Persona Summarize - URLを自動検出、記事抽出、ペルソナベース要約を生成
-- **F201 [Must]**: Persona Chat Mode - `/persona <style>`コマンドでBotの人格を切り替えて会話継続
-- **F302 [Must]**: Chat Memory - F201会話モード中の会話コンテキストを維持
-- **F202 [Should]**: Debate Mode - `/debate`コマンドで反論を生成
-- **F301 [Could]**: Context Memory (RAG) - ユーザーの過去のリンク履歴を記憶してパーソナライズコメント
+## ドキュメント
 
-## プロジェクトドキュメント
+詳細な設計は `docs/` 参照:
+- `docs/01.project.md`: 完全な要件定義（MoSCoW 優先度）
+- `docs/02.architecture.md`: 技術アーキテクチャ、ワークフロー例
 
-重要な設計ドキュメントは`docs/`配下にあります:
-- `docs/01.project.md`: 機能優先度（MoSCoW）を含む完全な要件定義書
-- `docs/02.architecture.md`: 技術アーキテクチャ、ワークフロー例、ペルソナテンプレート形式
-
-新機能を実装する際は、プロジェクトビジョンとの整合性を確保するため、必ずこれらのドキュメントを参照してください。
-
-## デプロイ先
-
-- **ホスティング**: Koyeb（無料枠）
-- **コンテナ**: マルチステージビルドのDocker
-- **CI/CD**: GitHub Actionsによる自動デプロイ（予定）
-- **データ永続化**: RAGデータはエフェメラル（再デプロイで消失）- 要件上これは許容される
+新機能実装時は、プロジェクトビジョンとの整合性確保のためこれらを参照すること。
