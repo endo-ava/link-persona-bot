@@ -6,7 +6,7 @@ Qwen, OpenAI, OpenRouter, その他OpenAI互換のLLMサービスに対応。
 """
 
 import os
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from enum import Enum
 
 import httpx
@@ -26,7 +26,7 @@ class LLMProvider(str, Enum):
 
 
 # プロバイダー別のデフォルト設定
-PROVIDER_DEFAULTS = {
+PROVIDER_DEFAULTS: Dict[LLMProvider, Dict[str, str]] = {
     LLMProvider.OPENAI: {
         "api_url": "https://api.openai.com/v1",
         "model": "gpt-3.5-turbo",
@@ -52,7 +52,7 @@ class LLMClient:
         model: Optional[str] = None,
         provider: Optional[str] = None,
         extra_headers: Optional[Dict[str, str]] = None,
-    ):
+    ) -> None:
         """
         Args:
             api_key: LLM APIキー（Noneの場合は環境変数 LLM_API_KEY から取得）
@@ -62,10 +62,10 @@ class LLMClient:
             extra_headers: 追加のHTTPヘッダー（OpenRouter等で必要）
         """
         # プロバイダーの決定
-        self.provider = provider or os.getenv("LLM_PROVIDER", LLMProvider.QWEN)
+        self.provider: str = provider or os.getenv("LLM_PROVIDER", LLMProvider.QWEN)
 
         # プロバイダー別のデフォルト設定を取得
-        provider_config = PROVIDER_DEFAULTS.get(self.provider, {})
+        provider_config: Dict[str, str] = PROVIDER_DEFAULTS.get(self.provider, {})
 
         # APIキーの取得
         self.api_key = api_key or os.getenv("LLM_API_KEY")
@@ -155,7 +155,7 @@ class LLMClient:
             生成されたテキスト
 
         Raises:
-            httpx.HTTPError: API呼び出しに失敗した場合
+            RuntimeError: API呼び出しに失敗した場合、またはレスポンスが不正な場合
         """
         headers = self._build_headers()
 
@@ -167,15 +167,49 @@ class LLMClient:
         }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{self.api_url}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            response.raise_for_status()
+            try:
+                response = await client.post(
+                    f"{self.api_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
 
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
+                data: Dict[str, Any] = response.json()
+
+                # レスポンス構造のバリデーション
+                if "choices" not in data or not data["choices"]:
+                    raise ValueError("Invalid API response structure: no choices")
+
+                if "message" not in data["choices"][0]:
+                    raise ValueError("Invalid API response structure: no message in choice")
+
+                if "content" not in data["choices"][0]["message"]:
+                    raise ValueError("Invalid API response structure: no content in message")
+
+                return data["choices"][0]["message"]["content"]
+
+            except httpx.HTTPStatusError as e:
+                # HTTPエラーの場合、安全なエラーメッセージを返す
+                # （APIキーや機密情報が露出しないようにする）
+                print(f"LLM API error: {e.response.status_code}")
+                raise RuntimeError(
+                    f"LLM service error: {e.response.status_code}"
+                ) from e
+
+            except (KeyError, IndexError, ValueError) as e:
+                # レスポンス構造の検証エラー
+                raise RuntimeError(
+                    "Invalid response structure from LLM service"
+                ) from e
+
+            except httpx.ConnectError as e:
+                # 接続エラー
+                raise RuntimeError("Failed to connect to LLM service") from e
+
+            except httpx.TimeoutException as e:
+                # タイムアウトエラー
+                raise RuntimeError("LLM service request timed out") from e
 
     async def generate_persona_response(
         self,

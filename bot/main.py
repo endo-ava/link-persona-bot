@@ -23,31 +23,34 @@ intents.message_content = True  # メッセージ内容の取得を有効化
 class PersonaBot(discord.Client):
     """ペルソナ機能を持つDiscord Bot"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(intents=intents)
-        self.tree = app_commands.CommandTree(self)
+        self.tree: app_commands.CommandTree = app_commands.CommandTree(self)
 
         # ペルソナとLLMクライアントの初期化
-        self.persona_loader = get_persona_loader()
-        self.llm_client = get_llm_client()
+        from api.persona_loader import PersonaLoader
+        from api.llm_client import LLMClient
+
+        self.persona_loader: PersonaLoader = get_persona_loader()
+        self.llm_client: LLMClient = get_llm_client()
 
         # チャンネルごとのペルソナ設定を保持
         self.channel_personas: Dict[int, str] = {}
 
-        # チャンネルごとの会話履歴を保持（最大10件）
+        # チャンネルごとの会話履歴を保持（最大20件）
         self.conversation_history: Dict[int, List[Dict[str, str]]] = {}
 
-    async def setup_hook(self):
+    async def setup_hook(self) -> None:
         """起動時にコマンドを同期"""
         await self.tree.sync()
 
-    async def on_ready(self):
+    async def on_ready(self) -> None:
         """Bot起動時の処理"""
         print(f"Logged in as {self.user} (ID: {self.user.id})")
         print("------")
         print(f"Available personas: {', '.join(self.persona_loader.list_persona_ids())}")
 
-    async def on_message(self, message: discord.Message):
+    async def on_message(self, message: discord.Message) -> None:
         """メッセージ受信時の処理"""
         # 自分のメッセージは無視
         if message.author == self.user:
@@ -75,7 +78,7 @@ class PersonaBot(discord.Client):
             # ペルソナなしで通常応答
             await self.respond_without_persona(message, content)
 
-    async def respond_with_persona(self, message: discord.Message, channel_id: int, content: str):
+    async def respond_with_persona(self, message: discord.Message, channel_id: int, content: str) -> None:
         """ペルソナに基づいてメッセージに応答"""
         persona_id = self.channel_personas[channel_id]
         persona = self.persona_loader.get_persona(persona_id)
@@ -123,7 +126,7 @@ class PersonaBot(discord.Client):
                 await message.channel.send(f"エラーが発生しました: {str(e)}")
                 print(f"Error in respond_with_persona: {e}")
 
-    async def respond_without_persona(self, message: discord.Message, content: str):
+    async def respond_without_persona(self, message: discord.Message, content: str) -> None:
         """ペルソナなしで通常応答"""
         # タイピングインジケーターを表示
         async with message.channel.typing():
@@ -149,7 +152,7 @@ bot = PersonaBot()
 
 @bot.tree.command(name="persona", description="ペルソナを設定または解除します")
 @app_commands.describe(style="使用するペルソナのスタイル（例: sarcastic）")
-async def persona_command(interaction: discord.Interaction, style: Optional[str] = None):
+async def persona_command(interaction: discord.Interaction, style: Optional[str] = None) -> None:
     """
     /persona コマンド
     ペルソナを設定または解除する
@@ -220,8 +223,16 @@ async def persona_command(interaction: discord.Interaction, style: Optional[str]
     await interaction.response.send_message(embed=embed)
 
 
-def main():
-    """Botを起動"""
+def main() -> None:
+    """
+    メインエントリーポイント：Discord Botを起動する
+
+    環境変数 DISCORD_TOKEN から Bot トークンを読み込み、
+    Discord への接続を確立して Bot を実行する。
+
+    Raises:
+        ValueError: DISCORD_TOKEN が設定されていない場合
+    """
     token = os.getenv("DISCORD_TOKEN")
     if not token:
         raise ValueError("DISCORD_TOKEN not found in environment variables")

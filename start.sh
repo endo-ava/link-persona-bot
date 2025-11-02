@@ -3,6 +3,21 @@ set -e
 
 echo "Starting Link Persona Bot..."
 
+# 環境変数のバリデーション
+echo "Validating environment variables..."
+
+if [ -z "$DISCORD_TOKEN" ]; then
+    echo "ERROR: DISCORD_TOKEN is not set" >&2
+    exit 1
+fi
+
+if [ -z "$LLM_API_KEY" ]; then
+    echo "ERROR: LLM_API_KEY is not set" >&2
+    exit 1
+fi
+
+echo "Environment validation passed"
+
 # APIサーバーを起動（バックグラウンド）
 echo "Starting API server..."
 uvicorn api.main:app --host 0.0.0.0 --port 8000 &
@@ -29,8 +44,11 @@ fi
 
 # Discord Botを起動（フォアグラウンド、エラーでも継続）
 echo "Starting Discord Bot..."
-python -m bot.main || {
-    echo "Discord Bot failed to start or crashed, but keeping API server running..."
+
+# エラー出力からトークンやAPIキーをフィルタリングして起動
+# stderrとstdoutを両方処理し、機密情報を含む可能性のある行を除外
+python -m bot.main 2>&1 | grep -v -i "token\|api.key\|bearer" || {
+    echo "Discord Bot failed to start or crashed, but keeping API server running..." >&2
     # APIサーバーのプロセスを待機（フォアグラウンドに）
     wait $API_PID
 }
