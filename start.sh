@@ -18,6 +18,15 @@ for i in {1..30}; do
     sleep 1
 done
 
+# 定期Ping（外部URLを叩くことでスリープ防止）
+if [ ! -z "$PING_URL" ]; then
+  echo "Starting self-ping to $PING_URL every 10 minutes..."
+  while true; do
+    curl -fsS "$PING_URL" > /dev/null 2>&1 || echo "Ping failed at $(date)"
+    sleep 600  # 10分ごと
+  done &
+fi
+
 # Discord Botを起動（フォアグラウンド、エラーでも継続）
 echo "Starting Discord Bot..."
 python -m bot.main || {
