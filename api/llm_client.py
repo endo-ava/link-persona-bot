@@ -140,16 +140,22 @@ class LLMClient:
     async def chat_completion(
         self,
         messages: List[Dict[str, str]],
-        temperature: float = 0.7,
+        temperature: float = 1.0,
         max_tokens: int = 500,
+        top_p: float = 0.9,
+        frequency_penalty: float = 0.3,
+        presence_penalty: float = 0.2,
     ) -> str:
         """
         チャット補完APIを呼び出す
 
         Args:
             messages: メッセージのリスト [{"role": "user/assistant/system", "content": "..."}]
-            temperature: 生成のランダム性 (0.0-2.0)
+            temperature: 生成のランダム性 (0.0-2.0, デフォルト: 1.0)
             max_tokens: 最大生成トークン数
+            top_p: nucleus sampling (0.0-1.0, デフォルト: 0.9)
+            frequency_penalty: 同じ単語の繰り返しペナルティ (-2.0〜2.0, デフォルト: 0.3)
+            presence_penalty: 新しいトピックへの誘導 (-2.0〜2.0, デフォルト: 0.2)
 
         Returns:
             生成されたテキスト
@@ -164,6 +170,9 @@ class LLMClient:
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            "top_p": top_p,
+            "frequency_penalty": frequency_penalty,
+            "presence_penalty": presence_penalty,
         }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
