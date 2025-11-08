@@ -4,6 +4,7 @@ Discord Bot メインファイル
 
 import os
 import re
+import traceback
 from typing import Dict, List, Optional
 
 import discord
@@ -139,6 +140,22 @@ class PersonaBot(discord.Client):
         print(f"Logged in as {self.user} (ID: {self.user.id})")
         print("------")
         print(f"Available personas: {', '.join(self.persona_loader.list_persona_ids())}")
+        print(f"API URL: {self.api_client.api_url}")
+
+        # APIサーバーの接続確認
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"{self.api_client.api_url}/health")
+                if response.status_code == 200:
+                    print("✓ API server is running")
+                else:
+                    print(f"⚠️  API server returned status code: {response.status_code}")
+        except Exception as e:
+            print(f"❌ Cannot connect to API server: {e}")
+            print("   Make sure to start it with: uv run uvicorn api.main:app --reload")
+
+        print("------")
 
     async def on_message(self, message: discord.Message) -> None:
         """メッセージ受信時の処理"""
@@ -220,8 +237,9 @@ class PersonaBot(discord.Client):
                 await message.reply(formatted_response, mention_author=False)
 
             except Exception as e:
-                await message.channel.send(f"エラーが発生しました: {str(e)}")
-                print(f"Error in respond_with_persona: {e}")
+                await message.channel.send(f"エラーが発生しました: {str(e) or type(e).__name__}")
+                print(f"Error in respond_with_persona ({type(e).__name__}): {e}")
+                traceback.print_exc()
 
     async def respond_without_persona(self, message: discord.Message, content: str) -> None:
         """ペルソナなしで通常応答"""
@@ -239,8 +257,9 @@ class PersonaBot(discord.Client):
                 await message.reply(response, mention_author=False)
 
             except Exception as e:
-                await message.channel.send(f"エラーが発生しました: {str(e)}")
-                print(f"Error in respond_without_persona: {e}")
+                await message.channel.send(f"エラーが発生しました: {str(e) or type(e).__name__}")
+                print(f"Error in respond_without_persona ({type(e).__name__}): {e}")
+                traceback.print_exc()
 
     async def handle_url_summary(self, message: discord.Message, url: str) -> None:
         """
@@ -296,16 +315,16 @@ class PersonaBot(discord.Client):
                 await message.reply(embed=embed, mention_author=False)
 
             except APIClientError as e:
-                await message.channel.send(
-                    f"❌ 記事の取得に失敗しました: {str(e)}"
-                )
-                print(f"Error in handle_url_summary: {e}")
+                error_msg = f"❌ 記事の取得に失敗しました: {str(e)}"
+                await message.channel.send(error_msg)
+                print(f"Error in handle_url_summary (APIClientError): {e}")
+                traceback.print_exc()
 
             except Exception as e:
-                await message.channel.send(
-                    f"❌ 予期しないエラーが発生しました: {str(e)}"
-                )
-                print(f"Unexpected error in handle_url_summary: {e}")
+                error_msg = f"❌ 予期しないエラーが発生しました: {str(e) or type(e).__name__}"
+                await message.channel.send(error_msg)
+                print(f"Unexpected error in handle_url_summary ({type(e).__name__}): {e}")
+                traceback.print_exc()
 
 
 # Botインスタンスの作成
@@ -475,13 +494,15 @@ async def debate_command(interaction: discord.Interaction, url: str) -> None:
         await interaction.edit_original_response(
             content=f"❌ ディベート生成に失敗しました: {str(e)}"
         )
-        print(f"Error in debate_command: {e}")
+        print(f"Error in debate_command (APIClientError): {e}")
+        traceback.print_exc()
 
     except Exception as e:
         await interaction.edit_original_response(
-            content=f"❌ 予期しないエラーが発生しました: {str(e)}"
+            content=f"❌ 予期しないエラーが発生しました: {str(e) or type(e).__name__}"
         )
-        print(f"Unexpected error in debate_command: {e}")
+        print(f"Unexpected error in debate_command ({type(e).__name__}): {e}")
+        traceback.print_exc()
 
 
 def main() -> None:
