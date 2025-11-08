@@ -3,6 +3,7 @@ Discord Bot メインファイル
 """
 
 import os
+import re
 from typing import Dict, List, Optional
 
 import discord
@@ -12,6 +13,7 @@ from dotenv import load_dotenv
 
 from api.persona_loader import get_persona_loader, Persona
 from api.llm_client import get_llm_client
+from bot.api_client import get_api_client, APIClientError
 
 # 環境変数の読み込み
 load_dotenv()
@@ -19,6 +21,11 @@ load_dotenv()
 # Intentsの設定
 intents = discord.Intents.default()
 intents.message_content = True  # メッセージ内容の取得を有効化
+
+# URL検出用の正規表現パターン
+URL_PATTERN = re.compile(
+    r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+)
 
 
 class PersonaSelectView(View):
@@ -111,9 +118,11 @@ class PersonaBot(discord.Client):
         # ペルソナとLLMクライアントの初期化
         from api.persona_loader import PersonaLoader
         from api.llm_client import LLMClient
+        from bot.api_client import LinkPersonaAPIClient
 
         self.persona_loader: PersonaLoader = get_persona_loader()
         self.llm_client: LLMClient = get_llm_client()
+        self.api_client: LinkPersonaAPIClient = get_api_client()
 
         # チャンネルごとのペルソナ設定を保持
         self.channel_personas: Dict[int, str] = {}
@@ -139,6 +148,13 @@ class PersonaBot(discord.Client):
 
         # コマンドは無視（スラッシュコマンドで処理）
         if message.content.startswith("/"):
+            return
+
+        # URL検出と自動要約（F101: Auto Persona Summarize）
+        urls = URL_PATTERN.findall(message.content)
+        if urls:
+            # 最初のURLのみ処理（複数URLは対応していない）
+            await self.handle_url_summary(message, urls[0])
             return
 
         # メンションされていない場合は無視
@@ -225,6 +241,71 @@ class PersonaBot(discord.Client):
             except Exception as e:
                 await message.channel.send(f"エラーが発生しました: {str(e)}")
                 print(f"Error in respond_without_persona: {e}")
+
+    async def handle_url_summary(self, message: discord.Message, url: str) -> None:
+        """
+        URLを検出して自動的に要約を生成する（F101: Auto Persona Summarize）
+
+        Args:
+            message: Discordメッセージオブジェクト
+            url: 検出されたURL
+        """
+        # タイピングインジケーターを表示
+        async with message.channel.typing():
+            try:
+                # チャンネルで設定されているペルソナを取得（なければNone）
+                channel_id = message.channel.id
+                persona_id = self.channel_personas.get(channel_id)
+
+                # /ingest エンドポイントを呼び出し
+                result = await self.api_client.ingest_url(
+                    url=url,
+                    user_id=str(message.author.id),
+                    guild_id=str(message.guild.id) if message.guild else None,
+                    persona_id=persona_id,
+                )
+
+                # Discord Embedを作成
+                embed = discord.Embed(
+                    title=f"{result['persona_icon']} {result['persona_name']}の記事紹介",
+                    description=result['summary'],
+                    color=result['persona_color'],
+                    url=result['url'],
+                )
+
+                # 記事タイトルを追加
+                if result.get('title'):
+                    embed.add_field(
+                        name="📰 記事タイトル",
+                        value=result['title'],
+                        inline=False,
+                    )
+
+                # 元のURLを追加
+                embed.add_field(
+                    name="🔗 リンク",
+                    value=result['url'],
+                    inline=False,
+                )
+
+                # 切り詰められた場合は注記を追加
+                if result.get('truncated'):
+                    embed.set_footer(text="※ 記事が長いため、一部のみを要約しています")
+
+                # メッセージに返信
+                await message.reply(embed=embed, mention_author=False)
+
+            except APIClientError as e:
+                await message.channel.send(
+                    f"❌ 記事の取得に失敗しました: {str(e)}"
+                )
+                print(f"Error in handle_url_summary: {e}")
+
+            except Exception as e:
+                await message.channel.send(
+                    f"❌ 予期しないエラーが発生しました: {str(e)}"
+                )
+                print(f"Unexpected error in handle_url_summary: {e}")
 
 
 # Botインスタンスの作成
@@ -321,6 +402,86 @@ async def persona_command(interaction: discord.Interaction, style: Optional[str]
 
         view = PersonaSelectView(bot, channel_id)
         await interaction.response.send_message(embed=embed, view=view)
+
+
+@bot.tree.command(name="debate", description="記事の主張に対する反論を生成します")
+@app_commands.describe(url="記事のURL")
+async def debate_command(interaction: discord.Interaction, url: str) -> None:
+    """
+    /debate コマンド
+    記事の主張に対する反論を生成し、ディベート形式で返す（F202: Debate Mode）
+
+    Args:
+        interaction: Discordインタラクション
+        url: 記事のURL
+    """
+    # URLの簡易バリデーション
+    if not url.startswith(("http://", "https://")):
+        await interaction.response.send_message(
+            "❌ 有効なURLを指定してください（http://またはhttps://で始まる必要があります）",
+            ephemeral=True,
+        )
+        return
+
+    # 処理中メッセージを送信（5秒以内に応答する必要があるため）
+    await interaction.response.send_message(
+        "🤔 記事を分析してディベートを生成中...",
+    )
+
+    try:
+        # /debate エンドポイントを呼び出し
+        result = await bot.api_client.debate_article(url=url)
+
+        # Discord Embedを作成
+        embed = discord.Embed(
+            title="⚔️ ディベートモード",
+            description="記事の主張に対する反論を生成しました。",
+            color=discord.Color.orange(),
+            url=result['url'],
+        )
+
+        # 元の主張
+        embed.add_field(
+            name="📝 元の主張",
+            value=result['original_stance'],
+            inline=False,
+        )
+
+        # 反論
+        embed.add_field(
+            name="💭 反論",
+            value=result['counter_argument'],
+            inline=False,
+        )
+
+        # ディベートのまとめ
+        embed.add_field(
+            name="🎯 まとめ",
+            value=result['debate_summary'],
+            inline=False,
+        )
+
+        # 元のURLを追加
+        embed.add_field(
+            name="🔗 元記事",
+            value=result['url'],
+            inline=False,
+        )
+
+        # 処理中メッセージを編集して結果を表示
+        await interaction.edit_original_response(content=None, embed=embed)
+
+    except APIClientError as e:
+        await interaction.edit_original_response(
+            content=f"❌ ディベート生成に失敗しました: {str(e)}"
+        )
+        print(f"Error in debate_command: {e}")
+
+    except Exception as e:
+        await interaction.edit_original_response(
+            content=f"❌ 予期しないエラーが発生しました: {str(e)}"
+        )
+        print(f"Unexpected error in debate_command: {e}")
 
 
 def main() -> None:
