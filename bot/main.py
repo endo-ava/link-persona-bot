@@ -68,26 +68,6 @@ class PersonaBot(discord.Client):
 
     async def on_ready(self) -> None:
         """Bot起動時の処理"""
-        print(f"Logged in as {self.user} (ID: {self.user.id})")
-        print("------")
-        print(f"Available personas: {', '.join(self.persona_loader.list_persona_ids())}")
-        print(f"API URL: {self.api_client.api_url}")
-
-        # APIサーバーの接続確認
-        try:
-            import httpx
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.api_client.api_url}/health")
-                if response.status_code == 200:
-                    print("✓ API server is running")
-                else:
-                    print(f"⚠️  API server returned status code: {response.status_code}")
-        except Exception as e:
-            print(f"❌ Cannot connect to API server: {e}")
-            print("   Make sure to start it with: uv run uvicorn api.main:app --reload")
-
-        print("------")
-
         logger.info(
             "Bot ready",
             extra={
@@ -334,7 +314,7 @@ async def debate_command(interaction: discord.Interaction, url: str) -> None:
             exc_info=True,
         )
         await interaction.edit_original_response(
-            content=f"❌ 予期しないエラーが発生しました: {str(e) or type(e).__name__}"
+            content=f"❌ 予期しないエラーが発生しました: {str(e)}"
         )
 
 

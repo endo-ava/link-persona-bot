@@ -141,7 +141,7 @@ class LLMClient:
         self,
         messages: List[Dict[str, str]],
         temperature: float = 1.0,
-        max_tokens: int = 500,
+        max_tokens: int = 2000,
         top_p: float = 0.9,
         frequency_penalty: float = 0.3,
         presence_penalty: float = 0.2,
