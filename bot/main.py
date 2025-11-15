@@ -150,9 +150,23 @@ class PersonaBot(discord.Client):
                     guild_id=str(message.guild.id) if message.guild else None,
                 )
 
-                # Discord Embedを作成して送信
-                embed = self._create_ingest_embed(result)
-                await message.reply(embed=embed, mention_author=False)
+                # シンプルなテキスト形式で送信
+                persona = result['persona']
+
+                # テキストを構築
+                text_parts = [result['summary']]
+
+                # タイトルとリンクを追加
+                if result.get('article_title'):
+                    text_parts.append(f"\nタイトル: {result['article_title']}")
+                # URLを <>で囲んで埋め込み無効化
+                text_parts.append(f"<{result['article_url']}>")
+
+                # ペルソナモード表示（メンション応答と同じ形式）
+                text_parts.append(f"\n-# ペルソナモード: {persona['name']}")
+
+                text = '\n'.join(text_parts)
+                await message.reply(text, mention_author=False)
 
             except APIClientError as e:
                 logger.warning(
@@ -211,38 +225,6 @@ class PersonaBot(discord.Client):
         content = content.replace(f"<@!{self.user.id}>", "")
         content = content.strip()
         return content if content else "何か話しかけてください。"
-
-    def _create_ingest_embed(self, result) -> discord.Embed:
-        """記事要約結果からEmbedを作成
-
-        Args:
-            result: IngestResponse
-
-        Returns:
-            Discord Embed
-        """
-        persona = result['persona']
-        embed = discord.Embed(
-            title=f"{persona['icon']} {persona['name']}の記事紹介",
-            description=result['summary'],
-            color=persona['color'],
-            url=result['article_url'],
-        )
-
-        if result.get('article_title'):
-            embed.add_field(
-                name="📰 記事タイトル",
-                value=result['article_title'],
-                inline=False,
-            )
-
-        embed.add_field(
-            name="🔗 リンク",
-            value=result['article_url'],
-            inline=False,
-        )
-
-        return embed
 
 
 # Botインスタンスの作成

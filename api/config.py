@@ -55,12 +55,12 @@ class APISettings(BaseSettings):
     @property
     def summary_min_length(self) -> int:
         """要約の最小文字数"""
-        return 100
+        return 200
 
     @property
     def summary_max_length(self) -> int:
         """要約の最大文字数"""
-        return 150
+        return 300
 
 
 # グローバル設定インスタンス

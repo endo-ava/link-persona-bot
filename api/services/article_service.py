@@ -190,7 +190,7 @@ class ArticleService:
             LLMError: LLM呼び出し失敗
         """
         # 要約生成プロンプト
-        user_prompt = f"""以下の記事を、あなたの人格で{self.settings.summary_min_length}〜{self.settings.summary_max_length}字で要約してください。
+        user_prompt = f"""以下の記事を、あなたの人格で{self.settings.summary_min_length}〜{self.settings.summary_max_length}字で要約し、意見を述べてください。
 
 記事タイトル: {article.get('title', '(タイトルなし)')}
 
