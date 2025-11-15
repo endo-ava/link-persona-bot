@@ -14,7 +14,8 @@ uv sync
 cp .env.example .env  # DISCORD_TOKEN, LLM_API_KEY, LLM_PROVIDER を設定
 
 # API サーバー起動（開発モード）
-uv run uvicorn api.main:app --reload
+# 環境変数 API_HOST, API_PORT を .env から読み込む
+uv run python -m api.main
 
 # Discord Bot 起動
 uv run python -m bot.main

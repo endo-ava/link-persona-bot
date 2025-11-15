@@ -20,13 +20,18 @@ echo "Environment validation passed"
 
 # APIサーバーを起動（バックグラウンド）
 echo "Starting API server..."
-uvicorn api.main:app --host 0.0.0.0 --port 8000 &
+
+# 環境変数からホストとポートを取得（デフォルト値あり）
+API_HOST=${API_HOST:-0.0.0.0}
+API_PORT=${API_PORT:-8000}
+
+uvicorn api.main:app --host "$API_HOST" --port "$API_PORT" &
 API_PID=$!
 
 # APIサーバーが起動するまで待機
-echo "Waiting for API server to be ready..."
+echo "Waiting for API server to be ready on http://localhost:$API_PORT..."
 for i in {1..30}; do
-    if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+    if curl -s "http://localhost:$API_PORT/health" > /dev/null 2>&1; then
         echo "API server is ready!"
         break
     fi
