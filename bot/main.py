@@ -2,16 +2,20 @@
 Discord Bot メインファイル
 """
 
+import logging
 import os
-from typing import Dict, List, Optional
+from typing import Optional
 
 import discord
 from discord import app_commands
-from discord.ui import View, Select
 from dotenv import load_dotenv
 
-from api.persona_loader import get_persona_loader, Persona
+from api.persona_loader import get_persona_loader
 from api.llm_client import get_llm_client
+from bot.api_client import get_api_client, APIClientError
+
+# ロガー設定
+logger = logging.getLogger(__name__)
 
 # 環境変数の読み込み
 load_dotenv()
@@ -21,118 +25,60 @@ intents = discord.Intents.default()
 intents.message_content = True  # メッセージ内容の取得を有効化
 
 
-class PersonaSelectView(View):
-    """ペルソナ選択用のドロップダウンメニューを持つView"""
-
-    def __init__(self, bot_instance: "PersonaBot", channel_id: int):
-        super().__init__(timeout=180)  # 3分でタイムアウト
-        self.bot_instance = bot_instance
-        self.channel_id = channel_id
-
-        # ペルソナ選択ドロップダウンを作成
-        select = PersonaSelect(bot_instance, channel_id)
-        self.add_item(select)
-
-
-class PersonaSelect(Select):
-    """ペルソナを選択するドロップダウンメニュー"""
-
-    def __init__(self, bot_instance: "PersonaBot", channel_id: int):
-        self.bot_instance = bot_instance
-        self.channel_id = channel_id
-
-        # すべてのペルソナを取得してオプションを作成
-        personas = bot_instance.persona_loader.get_all_personas()
-        options = []
-
-        for persona_id, persona in personas.items():
-            options.append(
-                discord.SelectOption(
-                    label=persona.name,
-                    value=persona_id,
-                    description=persona.description[:100],  # Discordの制限: 最大100文字
-                    emoji=persona.icon,
-                )
-            )
-
-        # オプションをアルファベット順にソート（persona_idでソート）
-        options.sort(key=lambda x: x.value)
-
-        super().__init__(
-            placeholder="ペルソナを選択してください...",
-            min_values=1,
-            max_values=1,
-            options=options,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        """ユーザーが選択したときの処理"""
-        selected_persona_id = self.values[0]
-        persona = self.bot_instance.persona_loader.get_persona(selected_persona_id)
-
-        if not persona:
-            await interaction.response.send_message(
-                "エラー: ペルソナが見つかりません。",
-                ephemeral=True,
-            )
-            return
-
-        # ペルソナを設定
-        self.bot_instance.channel_personas[self.channel_id] = selected_persona_id
-
-        # 会話履歴をクリア
-        if self.channel_id in self.bot_instance.conversation_history:
-            self.bot_instance.conversation_history[self.channel_id] = []
-
-        # 確認メッセージを送信
-        embed = discord.Embed(
-            title="ペルソナ設定完了",
-            description=f"{persona.get_display_name()} モードに切り替わりました。\n\n"
-            f"**説明**: {persona.description}\n\n"
-            f"このチャンネルで何か話しかけてみてください。\n"
-            f"解除するには `/persona reset` を実行してください。",
-            color=persona.color,
-        )
-
-        await interaction.response.send_message(embed=embed)
-
-        # メニューを無効化（再利用防止）
-        self.disabled = True
-        await interaction.message.edit(view=self.view)
-
-
 class PersonaBot(discord.Client):
-    """ペルソナ機能を持つDiscord Bot"""
+    """ペルソナ機能を持つDiscord Bot
+
+    責務:
+    - Discord クライアントのライフサイクル管理
+    - イベントルーティング（handlers への委譲）
+    - Discord API との通信
+    """
 
     def __init__(self) -> None:
         super().__init__(intents=intents)
         self.tree: app_commands.CommandTree = app_commands.CommandTree(self)
 
-        # ペルソナとLLMクライアントの初期化
-        from api.persona_loader import PersonaLoader
-        from api.llm_client import LLMClient
+        # 依存関係の初期化
+        from bot.state.conversation_manager import ConversationManager
+        from bot.handlers import CommandHandler, MessageHandler
 
-        self.persona_loader: PersonaLoader = get_persona_loader()
-        self.llm_client: LLMClient = get_llm_client()
+        self.conversation_manager = ConversationManager()
+        self.persona_loader = get_persona_loader()
+        self.llm_client = get_llm_client()
+        self.api_client = get_api_client()
 
-        # チャンネルごとのペルソナ設定を保持
-        self.channel_personas: Dict[int, str] = {}
+        # ハンドラーの初期化（依存性注入）
+        self.command_handler = CommandHandler(
+            conversation_manager=self.conversation_manager,
+            persona_loader=self.persona_loader,
+        )
+        self.message_handler = MessageHandler(
+            conversation_manager=self.conversation_manager,
+            persona_loader=self.persona_loader,
+            llm_client=self.llm_client,
+            api_client=self.api_client,
+        )
 
-        # チャンネルごとの会話履歴を保持（最大20件）
-        self.conversation_history: Dict[int, List[Dict[str, str]]] = {}
+        logger.info("PersonaBot initialized")
 
     async def setup_hook(self) -> None:
         """起動時にコマンドを同期"""
         await self.tree.sync()
+        logger.info("Command tree synced")
 
     async def on_ready(self) -> None:
         """Bot起動時の処理"""
-        print(f"Logged in as {self.user} (ID: {self.user.id})")
-        print("------")
-        print(f"Available personas: {', '.join(self.persona_loader.list_persona_ids())}")
+        logger.info(
+            "Bot ready",
+            extra={
+                "user": str(self.user),
+                "user_id": self.user.id,
+                "personas": self.persona_loader.list_persona_ids(),
+            }
+        )
 
     async def on_message(self, message: discord.Message) -> None:
-        """メッセージ受信時の処理"""
+        """メッセージ受信時の処理 - ルーティングのみ"""
         # 自分のメッセージは無視
         if message.author == self.user:
             return
@@ -141,90 +87,124 @@ class PersonaBot(discord.Client):
         if message.content.startswith("/"):
             return
 
-        # メンションされていない場合は無視
-        if self.user not in message.mentions:
-            return
+        try:
+            # URL検出と自動要約（F101: Auto Persona Summarize）
+            urls = self.message_handler.detect_urls(message.content)
+            if urls:
+                # 最初のURLのみ処理（複数URLは対応していない）
+                await self._handle_url_message(message, urls[0])
+                return
 
-        # メンション部分を除去したメッセージを取得（両形式に対応）
-        content = message.content.replace(f"<@{self.user.id}>", "").replace(f"<@!{self.user.id}>", "").strip()
-        if not content:
-            content = "何か話しかけてください。"
+            # メンションされていない場合は無視
+            if self.user not in message.mentions:
+                return
 
-        # このチャンネルでペルソナが設定されているか確認
-        channel_id = message.channel.id
-        if channel_id in self.channel_personas:
-            # ペルソナモードで応答
-            await self.respond_with_persona(message, channel_id, content)
-        else:
-            # ペルソナなしで通常応答
-            await self.respond_without_persona(message, content)
+            # メンション応答処理
+            await self._handle_mention_message(message)
 
-    async def respond_with_persona(self, message: discord.Message, channel_id: int, content: str) -> None:
-        """ペルソナに基づいてメッセージに応答"""
-        persona_id = self.channel_personas[channel_id]
-        persona = self.persona_loader.get_persona(persona_id)
+        except Exception as e:
+            logger.error(
+                "Error handling message",
+                extra={"message_id": message.id, "error": str(e)},
+                exc_info=True,
+            )
+            await message.channel.send("エラーが発生しました。")
 
-        if not persona:
-            await message.channel.send("エラー: ペルソナが見つかりません。")
-            return
+    async def _handle_url_message(
+        self,
+        message: discord.Message,
+        url: str,
+    ) -> None:
+        """URL検出メッセージを処理
 
-        # タイピングインジケーターを表示
+        Args:
+            message: Discordメッセージオブジェクト
+            url: 検出されたURL
+        """
         async with message.channel.typing():
             try:
-                # 会話履歴を取得
-                history = self.conversation_history.get(channel_id, [])
-
-                # LLM APIで応答生成
-                response = await self.llm_client.generate_persona_response(
-                    system_prompt=persona.get_system_message(),
-                    user_message=content,
-                    conversation_history=history,
+                result = await self.message_handler.handle_url(
+                    url=url,
+                    channel_id=message.channel.id,
+                    user_id=str(message.author.id),
+                    guild_id=str(message.guild.id) if message.guild else None,
                 )
 
-                # 会話履歴を更新
-                if channel_id not in self.conversation_history:
-                    self.conversation_history[channel_id] = []
+                # シンプルなテキスト形式で送信
+                persona = result['persona']
 
-                self.conversation_history[channel_id].append(
-                    {"role": "user", "content": content}
+                # テキストを構築
+                text_parts = [result['summary']]
+
+                # タイトルとリンクを追加
+                if result.get('article_title'):
+                    text_parts.append(f"\nタイトル: {result['article_title']}")
+                # URLを <>で囲んで埋め込み無効化
+                text_parts.append(f"<{result['article_url']}>")
+
+                # ペルソナモード表示（メンション応答と同じ形式）
+                text_parts.append(f"\n-# ペルソナモード: {persona['name']}")
+
+                text = '\n'.join(text_parts)
+                await message.reply(text, mention_author=False)
+
+            except APIClientError as e:
+                logger.warning(
+                    "URL ingestion failed",
+                    extra={"url": url, "error": str(e)},
                 )
-                self.conversation_history[channel_id].append(
-                    {"role": "assistant", "content": response}
-                )
+                await message.channel.send(f"記事の取得に失敗しました: {str(e)}")
 
-                # 履歴が10件を超えたら古いものから削除
-                if len(self.conversation_history[channel_id]) > 20:
-                    self.conversation_history[channel_id] = self.conversation_history[
-                        channel_id
-                    ][-20:]
+    async def _handle_mention_message(
+        self,
+        message: discord.Message,
+    ) -> None:
+        """メンション応答を処理
 
-                # 通常のメッセージとして送信（ペルソナ名を小さく表示）
-                formatted_response = f"{response}\n\n-# ペルソナモード: {persona_id}"
+        Args:
+            message: Discordメッセージオブジェクト
+        """
+        # メンション部分を除去
+        content = self._extract_content_from_mention(message)
 
-                await message.reply(formatted_response, mention_author=False)
-
-            except Exception as e:
-                await message.channel.send(f"エラーが発生しました: {str(e)}")
-                print(f"Error in respond_with_persona: {e}")
-
-    async def respond_without_persona(self, message: discord.Message, content: str) -> None:
-        """ペルソナなしで通常応答"""
-        # タイピングインジケーターを表示
         async with message.channel.typing():
             try:
-                # LLM APIで応答生成（システムプロンプトなし）
-                response = await self.llm_client.generate_persona_response(
-                    system_prompt="あなたは親切で役に立つアシスタントです。",
-                    user_message=content,
-                    conversation_history=[],
+                response = await self.message_handler.handle_mention(
+                    channel_id=message.channel.id,
+                    content=content,
                 )
 
-                # 通常のメッセージとして返信
-                await message.reply(response, mention_author=False)
+                # ペルソナ情報を取得して整形
+                persona_id = self.conversation_manager.get_persona(message.channel.id)
+                if persona_id:
+                    formatted = f"{response}\n\n-# ペルソナモード: {persona_id}"
+                else:
+                    formatted = response
+
+                await message.reply(formatted, mention_author=False)
 
             except Exception as e:
+                logger.error(
+                    "Mention handling failed",
+                    extra={"message_id": message.id, "error": str(e)},
+                    exc_info=True,
+                )
                 await message.channel.send(f"エラーが発生しました: {str(e)}")
-                print(f"Error in respond_without_persona: {e}")
+
+    def _extract_content_from_mention(self, message: discord.Message) -> str:
+        """メンションを除去してコンテンツを抽出
+
+        Args:
+            message: Discordメッセージオブジェクト
+
+        Returns:
+            メンション除去後のコンテンツ
+        """
+        content = message.content
+        content = content.replace(f"<@{self.user.id}>", "")
+        content = content.replace(f"<@!{self.user.id}>", "")
+        content = content.strip()
+        return content if content else "何か話しかけてください。"
 
 
 # Botインスタンスの作成
@@ -235,92 +215,107 @@ bot = PersonaBot()
 @app_commands.describe(style="使用するペルソナのスタイル（例: sarcastic）または 'reset' で解除")
 async def persona_command(interaction: discord.Interaction, style: Optional[str] = None) -> None:
     """
-    /persona コマンド
-    ペルソナを設定または解除する
+    /persona コマンド - ハンドラーに委譲
 
     - 引数なし: ドロップダウンメニューを表示（または現在の設定を表示）
     - 引数あり: 直接ペルソナを設定（後方互換性）
     - 'reset': ペルソナを解除
     """
+    from bot.ui.persona_components import PersonaSelectView
+    from bot.exceptions import PersonaNotFoundError
+
     channel_id = interaction.channel_id
 
-    # "reset" で解除
-    if style and style.lower() == "reset":
-        if channel_id in bot.channel_personas:
-            old_persona = bot.persona_loader.get_persona(bot.channel_personas[channel_id])
-            old_display_name = old_persona.get_display_name() if old_persona else "不明なペルソナ"
-            del bot.channel_personas[channel_id]
-            # 会話履歴もクリア
-            if channel_id in bot.conversation_history:
-                del bot.conversation_history[channel_id]
-            await interaction.response.send_message(
-                f"ペルソナ {old_display_name} を解除しました。"
-            )
-        else:
-            await interaction.response.send_message("ペルソナが設定されていません。")
-        return
-
-    # スタイルが指定されている場合は直接設定（後方互換性）
-    if style:
-        persona = bot.persona_loader.get_persona(style)
-        if not persona:
-            available = ", ".join(bot.persona_loader.list_persona_ids())
-            await interaction.response.send_message(
-                f"ペルソナ `{style}` が見つかりません。\n"
-                f"利用可能なペルソナ: {available}"
-            )
+    try:
+        # Reset処理
+        if style and style.lower() == "reset":
+            message = bot.command_handler.handle_persona_reset(channel_id)
+            await interaction.response.send_message(message)
             return
 
-        # ペルソナを設定
-        bot.channel_personas[channel_id] = style
+        # スタイル指定あり: 直接設定
+        if style:
+            try:
+                embed = bot.command_handler.handle_persona_set(channel_id, style)
+                await interaction.response.send_message(embed=embed)
+            except PersonaNotFoundError as e:
+                await interaction.response.send_message(str(e))
+            return
 
-        # 会話履歴をクリア
-        if channel_id in bot.conversation_history:
-            bot.conversation_history[channel_id] = []
+        # スタイル指定なし: 現在のペルソナを表示 or 選択UIを表示
+        current_embed = bot.command_handler.handle_persona_get(channel_id)
+        view = PersonaSelectView(bot.conversation_manager, channel_id)
 
-        # 確認メッセージ
-        embed = discord.Embed(
-            title="ペルソナ設定完了",
-            description=f"{persona.get_display_name()} モードに切り替わりました。\n\n"
-            f"**説明**: {persona.description}\n\n"
-            f"このチャンネルで何か話しかけてみてください。\n"
-            f"解除するには `/persona reset` を実行してください。",
-            color=persona.color,
+        if current_embed:
+            # 現在のペルソナがある場合
+            await interaction.response.send_message(embed=current_embed, view=view)
+        else:
+            # ペルソナ未設定の場合
+            prompt_embed = bot.command_handler.create_persona_selection_embed()
+            await interaction.response.send_message(embed=prompt_embed, view=view)
+
+    except Exception as e:
+        logger.error(
+            "Persona command failed",
+            extra={"channel_id": channel_id, "style": style, "error": str(e)},
+            exc_info=True,
+        )
+        await interaction.response.send_message(
+            "エラーが発生しました。",
+            ephemeral=True,
         )
 
-        await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="debate", description="記事の主張に対する反論を生成します")
+@app_commands.describe(url="記事のURL")
+async def debate_command(interaction: discord.Interaction, url: str) -> None:
+    """
+    /debate コマンド
+    記事の主張に対する反論を生成し、ディベート形式で返す（F202: Debate Mode）
+
+    Args:
+        interaction: Discordインタラクション
+        url: 記事のURL
+    """
+    # URLの簡易バリデーション
+    if not url.startswith(("http://", "https://")):
+        await interaction.response.send_message(
+            "❌ 有効なURLを指定してください（http://またはhttps://で始まる必要があります）",
+            ephemeral=True,
+        )
         return
 
-    # スタイルが指定されていない場合
-    # すでにペルソナが設定されている場合は現在の設定を表示し、ドロップダウンも表示
-    if channel_id in bot.channel_personas:
-        current_persona_id = bot.channel_personas[channel_id]
-        persona = bot.persona_loader.get_persona(current_persona_id)
+    # 処理中メッセージを送信（5秒以内に応答する必要があるため）
+    await interaction.response.send_message(
+        "🤔 記事を分析してディベートを生成中...",
+    )
 
-        # 現在のペルソナ情報を埋め込みで表示
-        embed = discord.Embed(
-            title="現在のペルソナ",
-            description=f"{persona.get_display_name()}\n\n"
-            f"**説明**: {persona.description}\n\n"
-            f"別のペルソナに変更する場合は下のメニューから選択してください。\n"
-            f"解除するには `/persona reset` を実行してください。",
-            color=persona.color,
+    try:
+        # TODO: 新しいAPIでは/debateは会話ベースに変更されているため、
+        # 記事ベースのディベート機能は現在未実装
+        await interaction.edit_original_response(
+            content="申し訳ございません。ディベート機能は現在リファクタリング中のため一時的に利用できません。\n"
+            "代わりに `/persona` コマンドでペルソナを設定し、そのペルソナと会話してみてください！"
         )
 
-        # ドロップダウンメニューを表示
-        view = PersonaSelectView(bot, channel_id)
-        await interaction.response.send_message(embed=embed, view=view)
-    else:
-        # ペルソナが設定されていない場合はドロップダウンメニューのみ表示
-        embed = discord.Embed(
-            title="ペルソナ選択",
-            description="使用するペルソナを下のメニューから選択してください。\n"
-            "各ペルソナには独自の個性と話し方があります。",
-            color=discord.Color.blue(),
+    except APIClientError as e:
+        logger.warning(
+            "Debate command failed (API error)",
+            extra={"url": url, "error": str(e)},
+        )
+        await interaction.edit_original_response(
+            content=f"❌ ディベート生成に失敗しました: {str(e)}"
         )
 
-        view = PersonaSelectView(bot, channel_id)
-        await interaction.response.send_message(embed=embed, view=view)
+    except Exception as e:
+        logger.error(
+            "Unexpected error in debate_command",
+            extra={"url": url, "error": str(e)},
+            exc_info=True,
+        )
+        await interaction.edit_original_response(
+            content=f"❌ 予期しないエラーが発生しました: {str(e)}"
+        )
 
 
 def main() -> None:
@@ -337,6 +332,7 @@ def main() -> None:
     if not token:
         raise ValueError("DISCORD_TOKEN not found in environment variables")
 
+    logger.info("Starting Discord Bot")
     bot.run(token)
 
 
