@@ -3,6 +3,8 @@
 TypedDictを使用してBot内部およびAPI通信の型安全性を確保します。
 """
 
+from __future__ import annotations
+
 from typing import TypedDict, NotRequired
 
 
@@ -34,7 +36,7 @@ class DebateRequest(TypedDict):
     """ディベートリクエスト"""
     persona_id: str
     user_message: str
-    conversation_history: list[dict[str, str]]
+    conversation_history: list[ConversationMessage]
 
 
 class DebateResponse(TypedDict):

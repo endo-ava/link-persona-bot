@@ -10,7 +10,13 @@ from typing import Any, Optional
 import httpx
 
 from bot.config import get_settings
-from bot.models import IngestRequest, IngestResponse, DebateRequest, DebateResponse
+from bot.models import (
+    ConversationMessage,
+    IngestRequest,
+    IngestResponse,
+    DebateRequest,
+    DebateResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -223,14 +229,14 @@ class APIClient:
         self,
         persona_id: str,
         user_message: str,
-        conversation_history: list[dict[str, str]],
+        conversation_history: list[ConversationMessage],
     ) -> DebateResponse:
         """ペルソナとディベートする
 
         Args:
             persona_id: ペルソナID
             user_message: ユーザーメッセージ
-            conversation_history: 会話履歴
+            conversation_history: 会話履歴（ConversationMessageのリスト）
 
         Returns:
             ディベートレスポンス

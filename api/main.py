@@ -6,7 +6,7 @@ Discord Botが記事要約とディベートを行うためのAPIエンドポイ
 import logging
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
 
@@ -48,6 +48,43 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# === サービスの依存性注入 ===
+
+# グローバルサービスインスタンス
+_article_service: Optional[ArticleService] = None
+_debate_service: Optional[DebateService] = None
+
+
+def get_article_service() -> ArticleService:
+    """ArticleServiceのシングルトンインスタンスを取得
+
+    FastAPIの依存性注入で使用されます。
+    """
+    global _article_service
+    if _article_service is None:
+        _article_service = ArticleService(
+            article_fetcher=get_article_fetcher(),
+            llm_client=get_llm_client(),
+            persona_loader=get_persona_loader(),
+        )
+    return _article_service
+
+
+def get_debate_service() -> DebateService:
+    """DebateServiceのシングルトンインスタンスを取得
+
+    FastAPIの依存性注入で使用されます。
+    """
+    global _debate_service
+    if _debate_service is None:
+        _debate_service = DebateService(
+            article_fetcher=get_article_fetcher(),
+            llm_client=get_llm_client(),
+            persona_loader=get_persona_loader(),
+        )
+    return _debate_service
 
 
 # === リクエスト・レスポンスモデル ===
@@ -95,7 +132,10 @@ async def health_check() -> HealthResponse:
 
 
 @app.post("/ingest")
-async def ingest_url(request: IngestRequest) -> dict:
+async def ingest_url(
+    request: IngestRequest,
+    article_service: ArticleService = Depends(get_article_service)
+) -> dict:
     """URLから記事を取得し、ペルソナベースで要約を生成
 
     1. URLから記事本文を抽出
@@ -123,13 +163,6 @@ async def ingest_url(request: IngestRequest) -> dict:
     )
 
     try:
-        # サービスを直接インスタンス化
-        article_service = ArticleService(
-            article_fetcher=get_article_fetcher(),
-            llm_client=get_llm_client(),
-            persona_loader=get_persona_loader(),
-        )
-
         result = await article_service.generate_summary(
             url=str(request.url),
             persona_id=request.persona_id,
@@ -183,7 +216,10 @@ async def ingest_url(request: IngestRequest) -> dict:
 
 
 @app.post("/debate")
-async def debate_article(request: DebateRequest) -> dict:
+async def debate_article(
+    request: DebateRequest,
+    debate_service: DebateService = Depends(get_debate_service)
+) -> dict:
     """ペルソナとの対話レスポンスを生成
 
     指定されたペルソナの人格で、ユーザーメッセージに対するレスポンスを生成します。
@@ -208,13 +244,6 @@ async def debate_article(request: DebateRequest) -> dict:
     )
 
     try:
-        # サービスを直接インスタンス化
-        debate_service = DebateService(
-            article_fetcher=get_article_fetcher(),
-            llm_client=get_llm_client(),
-            persona_loader=get_persona_loader(),
-        )
-
         # 会話履歴にユーザーメッセージを追加
         full_history = request.conversation_history.copy()
         full_history.append({

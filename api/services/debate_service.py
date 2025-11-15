@@ -7,7 +7,7 @@ import logging
 from typing import Optional
 
 from api.config import get_settings
-from api.exceptions import ArticleFetchError, LLMError
+from api.exceptions import ArticleFetchError, LLMError, PersonaNotFoundError
 from api.fetcher import ArticleFetcher
 from api.llm_client import LLMClient
 from api.models.responses import DebateResponse, PersonaInfo
@@ -78,7 +78,13 @@ class DebateService:
             if not persona:
                 # デフォルトペルソナを使用
                 all_personas = self.persona_loader.get_all_personas()
-                persona = next(iter(all_personas.values())) if all_personas else None
+                if all_personas:
+                    persona = next(iter(all_personas.values()))
+                else:
+                    raise PersonaNotFoundError(
+                        "No personas available",
+                        details={"persona_id": persona_id}
+                    )
 
             # 会話履歴がある場合は、それを基にレスポンスを生成
             if conversation_history:
